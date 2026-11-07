@@ -7,7 +7,7 @@ on:
     - cron: "7,22,37,52 * * * *"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: paypay-monitor
@@ -29,10 +29,9 @@ jobs:
       - name: Install dependencies
         run: pip install feedparser
 
-      - name: Scan feeds and notify Discord
+      - name: Monitor X users
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          RSS_FEEDS: ${{ vars.RSS_FEEDS }}
         run: |
           python - <<'PY'
           import os
@@ -43,24 +42,36 @@ jobs:
           import feedparser
           from html import unescape
 
-          webhook = os.environ["DISCORD_WEBHOOK"]
-          feeds = os.environ.get("RSS_FEEDS", "").splitlines()
+          WEBHOOK = os.environ["DISCORD_WEBHOOK"]
+          NITTER = "https://nitter.mie.foundation"
 
-          state_file = "seen.json"
+          # 監視ユーザーを読み込む
+          with open("users.txt", encoding="utf-8") as f:
+              users = [
+                  line.strip().lstrip("@")
+                  for line in f
+                  if line.strip() and not line.strip().startswith("#")
+              ]
 
+          users = list(dict.fromkeys(
+              u for u in users
+              if re.fullmatch(r"[A-Za-z0-9_]{1,15}", u)
+          ))
+
+          # 過去に通知したリンク
           try:
-              with open(state_file, encoding="utf-8") as f:
+              with open("seen.json", encoding="utf-8") as f:
                   seen = set(json.load(f))
           except FileNotFoundError:
               seen = set()
 
-          def send(message):
+          def notify(message):
               data = json.dumps({
                   "content": message
               }).encode("utf-8")
 
               req = urllib.request.Request(
-                  webhook,
+                  WEBHOOK,
                   data=data,
                   headers={
                       "Content-Type": "application/json",
@@ -72,30 +83,55 @@ jobs:
                   if response.status not in (200, 204):
                       raise RuntimeError("Discord notification failed")
 
-          found = 0
+          detected = 0
 
-          for feed_url in feeds:
-              feed_url = feed_url.strip()
-
-              if not feed_url.startswith("https://"):
-                  continue
+          for user in users:
+              feed_url = f"{NITTER}/{user}/rss"
 
               try:
-                  feed = feedparser.parse(feed_url)
+                  req = urllib.request.Request(
+                      feed_url,
+                      headers={"User-Agent": "Mozilla/5.0"}
+                  )
+
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      feed = feedparser.parse(response.read())
+
+                  if feed.bozo and not feed.entries:
+                      print(f"Feed error: @{user}")
+                      continue
+
+                  print(f"Checking @{user}: {len(feed.entries)} posts")
 
                   for entry in feed.entries:
-                      content = unescape(
-                          entry.get("title", "") + " " +
+                      content = unescape(entry.get("title", ""))
+
+                      content += " " + unescape(
                           entry.get("summary", "")
                       )
+
+                      for item in entry.get("content", []):
+                          content += " " + unescape(
+                              item.get("value", "")
+                          )
 
                       links = re.findall(
                           r'https?://pay\.paypay\.ne\.jp/[^\s<>"\']+',
                           content
                       )
 
+                      post_url = entry.get("link", "")
+
+                      # Nitterの投稿URLをXのURLに変換
+                      post_url = re.sub(
+                          r"https?://[^/]+/",
+                          "https://x.com/",
+                          post_url
+                      )
+
                       for link in set(links):
-                          post_url = entry.get("link", "")
+                          link = link.rstrip(".,;!?)]}")
+
                           key = hashlib.sha256(
                               (post_url + link).encode()
                           ).hexdigest()
@@ -103,22 +139,25 @@ jobs:
                           if key in seen:
                               continue
 
-                          send(
-                              "PayPayリンクを検出しました\n"
-                              f"リンク: {link}\n"
-                              f"投稿元: {post_url or feed_url}"
+                          notify(
+                              "🔔 PayPayリンクを検出！\n"
+                              f"ユーザー: @{user}\n"
+                              f"PayPayリンク: {link}\n"
+                              f"投稿元: {post_url}"
                           )
 
                           seen.add(key)
-                          found += 1
+                          detected += 1
 
               except Exception as e:
-                  print(f"Feed error: {feed_url}: {e}")
+                  print(f"Error @{user}: {e}")
 
-          with open(state_file, "w", encoding="utf-8") as f:
-              json.dump(sorted(seen), f)
+          # 重複チェック情報を保存
+          with open("seen.json", "w", encoding="utf-8") as f:
+              json.dump(sorted(seen)[-5000:], f)
 
-          print(f"Detected: {found}")
+          print(f"監視ユーザー数: {len(users)}")
+          print(f"新規検出数: {detected}")
           PY
 
       - name: Save duplicate-check data
