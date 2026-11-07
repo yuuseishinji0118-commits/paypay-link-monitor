@@ -1,0 +1,35 @@
+
+name: Discord Notification Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Discord notification
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          python - <<'PY'
+          import os
+          import json
+          import urllib.request
+
+          url = os.environ["WEBHOOK_URL"]
+
+          data = json.dumps({
+              "content": "✅ PayPay検知BotのDiscord接続テスト成功！"
+          }).encode()
+
+          req = urllib.request.Request(
+              url,
+              data=data,
+              headers={"Content-Type": "application/json"},
+              method="POST"
+          )
+
+          with urllib.request.urlopen(req) as response:
+              print("Status:", response.status)
+          PY
