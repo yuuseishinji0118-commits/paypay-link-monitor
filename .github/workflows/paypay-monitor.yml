@@ -4,56 +4,130 @@ name: PayPay Link Monitor
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "7,22,37,52 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paypay-monitor
+  cancel-in-progress: false
 
 jobs:
-  notify:
+  monitor:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check posts and notify Discord
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install feedparser
+
+      - name: Scan feeds and notify Discord
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          RSS_FEEDS: ${{ vars.RSS_FEEDS }}
         run: |
           python - <<'PY'
           import os
           import re
           import json
+          import hashlib
           import urllib.request
+          import feedparser
+          from html import unescape
 
           webhook = os.environ["DISCORD_WEBHOOK"]
+          feeds = os.environ.get("RSS_FEEDS", "").splitlines()
 
-          # 投稿データを受け取った後、ここで検出する
-          posts = []
+          state_file = "seen.json"
 
-          for post in posts:
-              text = post.get("text", "")
-              urls = re.findall(
-                  r'https?://pay\.paypay\.ne\.jp/[^\s]+',
-                  text
+          try:
+              with open(state_file, encoding="utf-8") as f:
+                  seen = set(json.load(f))
+          except FileNotFoundError:
+              seen = set()
+
+          def send(message):
+              data = json.dumps({
+                  "content": message
+              }).encode("utf-8")
+
+              req = urllib.request.Request(
+                  webhook,
+                  data=data,
+                  headers={
+                      "Content-Type": "application/json",
+                      "User-Agent": "PayPayMonitor/1.0"
+                  }
               )
 
-              for url in urls:
-                  message = {
-                      "content": (
-                          "PayPayリンクを検出しました\n"
-                          f"リンク: {url}\n"
-                          f"投稿: {post.get('url', '不明')}"
+              with urllib.request.urlopen(req, timeout=20) as response:
+                  if response.status not in (200, 204):
+                      raise RuntimeError("Discord notification failed")
+
+          found = 0
+
+          for feed_url in feeds:
+              feed_url = feed_url.strip()
+
+              if not feed_url.startswith("https://"):
+                  continue
+
+              try:
+                  feed = feedparser.parse(feed_url)
+
+                  for entry in feed.entries:
+                      content = unescape(
+                          entry.get("title", "") + " " +
+                          entry.get("summary", "")
                       )
-                  }
 
-                  data = json.dumps(message).encode("utf-8")
-                  req = urllib.request.Request(
-                      webhook,
-                      data=data,
-                      headers={
-                          "Content-Type": "application/json",
-                          "User-Agent": "PayPayLinkMonitor/1.0"
-                      }
-                  )
+                      links = re.findall(
+                          r'https?://pay\.paypay\.ne\.jp/[^\s<>"\']+',
+                          content
+                      )
 
-                  urllib.request.urlopen(req)
+                      for link in set(links):
+                          post_url = entry.get("link", "")
+                          key = hashlib.sha256(
+                              (post_url + link).encode()
+                          ).hexdigest()
+
+                          if key in seen:
+                              continue
+
+                          send(
+                              "PayPayリンクを検出しました\n"
+                              f"リンク: {link}\n"
+                              f"投稿元: {post_url or feed_url}"
+                          )
+
+                          seen.add(key)
+                          found += 1
+
+              except Exception as e:
+                  print(f"Feed error: {feed_url}: {e}")
+
+          with open(state_file, "w", encoding="utf-8") as f:
+              json.dump(sorted(seen), f)
+
+          print(f"Detected: {found}")
           PY
+
+      - name: Save duplicate-check data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add seen.json
+          git diff --cached --quiet || (
+            git commit -m "Update detected links"
+            git push
+          )
+
