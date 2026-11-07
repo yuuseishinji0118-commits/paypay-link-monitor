@@ -1,0 +1,59 @@
+
+name: PayPay Link Monitor
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check posts and notify Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import json
+          import urllib.request
+
+          webhook = os.environ["DISCORD_WEBHOOK"]
+
+          # 投稿データを受け取った後、ここで検出する
+          posts = []
+
+          for post in posts:
+              text = post.get("text", "")
+              urls = re.findall(
+                  r'https?://pay\.paypay\.ne\.jp/[^\s]+',
+                  text
+              )
+
+              for url in urls:
+                  message = {
+                      "content": (
+                          "PayPayリンクを検出しました\n"
+                          f"リンク: {url}\n"
+                          f"投稿: {post.get('url', '不明')}"
+                      )
+                  }
+
+                  data = json.dumps(message).encode("utf-8")
+                  req = urllib.request.Request(
+                      webhook,
+                      data=data,
+                      headers={
+                          "Content-Type": "application/json",
+                          "User-Agent": "PayPayLinkMonitor/1.0"
+                      }
+                  )
+
+                  urllib.request.urlopen(req)
+          PY
