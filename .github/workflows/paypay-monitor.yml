@@ -4,7 +4,8 @@ name: PayPay Link Monitor
 on:
   workflow_dispatch:
   schedule:
-    - cron: "7,22,37,52 * * * *"
+  - cron: "* * * * *"
+  
 
 permissions:
   contents: write
