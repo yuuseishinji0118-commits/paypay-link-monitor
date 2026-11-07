@@ -19,18 +19,17 @@ jobs:
 
           url = os.environ["WEBHOOK_URL"]
 
-          if not url:
-              print("Webhook URL is empty")
-              raise SystemExit(1)
-
           data = json.dumps({
-              "content": "Discord接続テスト成功！"
+              "content": "✅ PayPay検知BotのDiscord接続テスト成功！"
           }).encode()
 
           req = urllib.request.Request(
               url,
               data=data,
-              headers={"Content-Type": "application/json"},
+              headers={
+                  "Content-Type": "application/json",
+                  "User-Agent": "DiscordBot (https://github.com/yuuseishinji0118-commits/paypay-link-monitor, 1.0)"
+              },
               method="POST"
           )
 
@@ -39,7 +38,6 @@ jobs:
                   print("Success:", response.status)
           except urllib.error.HTTPError as e:
               print("HTTP Status:", e.code)
-              print("Discord response:", e.read().decode())
+              print("Response:", e.read().decode())
               raise
           PY
-    
