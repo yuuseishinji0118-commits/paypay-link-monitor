@@ -15,11 +15,16 @@ jobs:
           import os
           import json
           import urllib.request
+          import urllib.error
 
           url = os.environ["WEBHOOK_URL"]
 
+          if not url:
+              print("Webhook URL is empty")
+              raise SystemExit(1)
+
           data = json.dumps({
-              "content": "✅ PayPay検知BotのDiscord接続テスト成功！"
+              "content": "Discord接続テスト成功！"
           }).encode()
 
           req = urllib.request.Request(
@@ -29,6 +34,12 @@ jobs:
               method="POST"
           )
 
-          with urllib.request.urlopen(req) as response:
-              print("Status:", response.status)
+          try:
+              with urllib.request.urlopen(req) as response:
+                  print("Success:", response.status)
+          except urllib.error.HTTPError as e:
+              print("HTTP Status:", e.code)
+              print("Discord response:", e.read().decode())
+              raise
           PY
+    
